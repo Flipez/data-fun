@@ -6,5 +6,10 @@ description = "Install dependencies"
 alias = "i"
 run = "uv pip install -r requirements.txt"
 
+[tasks.freeze]
+description = "Freeze dependencies into requirements.txt"
+alias = "f"
+run = "uv pip freeze > requirements.txt"
+
 [env]
 _.python.venv = { path = ".venv", create = true } # create the venv if it doesn't exist
