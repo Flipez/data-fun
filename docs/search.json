@@ -4,7 +4,7 @@
     "href": "index.html",
     "title": "Data Fun",
     "section": "",
-    "text": "Welcome To My Blog\n\n\n\n\n\n\nTristan O’Malley\n\n\nSep 28, 2025\n\n\n\n\n\n\n\n\nNo matching items"
+    "text": "MVG Observer: Linear Regression\n\n\n\n\n\n\nRobert Müller\n\n\nOct 10, 2025\n\n\n\n\n\n\n\n\nNo matching items"
   },
   {
     "objectID": "posts/welcome/index.html",
@@ -12,5 +12,12 @@
     "title": "Welcome To My Blog",
     "section": "",
     "text": "This is the first post in a Quarto blog. Welcome!\nSince this post doesn’t specify an explicit image, the first image in the post will be used in the listing page of posts."
+  },
+  {
+    "objectID": "posts/mvg-linear-regression/index.html",
+    "href": "posts/mvg-linear-regression/index.html",
+    "title": "MVG Observer: Linear Regression",
+    "section": "",
+    "text": "import pandas as pd\nimport numpy as np\nimport sklearn\nimport scipy\nimport matplotlib.pyplot as plt\nfrom sklearn import preprocessing\n\n\nmvg_data_orig = pd.read_csv(\"https://data.mvg.auch.cool/subway_only_dedup.csv\")\n\n\nmvg_data = mvg_data_orig\nmvg_data = mvg_data.drop(columns=['transportType', 'realtimeDepartureTime'])\nmvg_data = mvg_data[mvg_data.realtime]\nmvg_data['onTime'] = mvg_data['delayInMinutes'] == 0\nmvg_data\n\n\n\n\n\n\n\n\ntimestamp\nstation\nplannedDepartureTime\nrealtime\ndelayInMinutes\nlabel\ndestination\nonTime\n\n\n\n\n3\n2024-03-26 04:22:52\nde:09162:1\n2024-03-26 05:01:00\nTrue\n0\nU4\nWestendstraße\nTrue\n\n\n4\n2024-03-26 04:36:54\nde:09162:1\n2024-03-26 05:05:00\nTrue\n0\nU5\nNeuperlach Süd\nTrue\n\n\n5\n2024-03-26 04:51:55\nde:09162:1\n2024-03-26 05:14:00\nTrue\n0\nU5\nLaimer Platz\nTrue\n\n\n6\n2024-03-26 05:04:57\nde:09162:1\n2024-03-26 05:21:00\nTrue\n0\nU4\nWestendstraße\nTrue\n\n\n7\n2024-03-26 05:10:59\nde:09162:1\n2024-03-26 05:25:00\nTrue\n0\nU5\nNeuperlach Süd\nTrue\n\n\n...\n...\n...\n...\n...\n...\n...\n...\n...\n\n\n21536419\n2025-06-14 20:59:03\nde:09162:750\n2025-06-14 22:28:00\nTrue\n0\nU2\nFeldmoching\nTrue\n\n\n21536420\n2025-06-14 20:59:03\nde:09162:750\n2025-06-14 22:31:00\nTrue\n0\nU2\nGiesing (Bahnhof)\nTrue\n\n\n21536421\n2025-06-14 21:13:22\nde:09162:750\n2025-06-14 22:38:00\nTrue\n0\nU2\nFeldmoching\nTrue\n\n\n21536422\n2025-06-14 21:13:22\nde:09162:750\n2025-06-14 22:41:00\nTrue\n0\nU2\nMessestadt Ost\nTrue\n\n\n21536423\n2025-06-14 21:13:22\nde:09162:750\n2025-06-14 22:48:00\nTrue\n0\nU2\nFeldmoching\nTrue\n\n\n\n\n16716979 rows × 8 columns"
   }
 ]

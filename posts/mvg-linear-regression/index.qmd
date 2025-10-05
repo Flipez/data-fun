@@ -1,0 +1,28 @@
+---
+title: "MVG Observer: Linear Regression"
+author: "Robert Müller"
+date: "2025-10-10"
+categories: [mvg, observatory, statistics]
+---
+
+
+```{python}
+import pandas as pd
+import numpy as np
+import sklearn
+import scipy
+import matplotlib.pyplot as plt
+from sklearn import preprocessing
+```
+
+```{python}
+mvg_data_orig = pd.read_csv("https://data.mvg.auch.cool/subway_only_dedup.csv")
+```
+
+```{python}
+mvg_data = mvg_data_orig
+mvg_data = mvg_data.drop(columns=['transportType', 'realtimeDepartureTime'])
+mvg_data = mvg_data[mvg_data.realtime]
+mvg_data['onTime'] = mvg_data['delayInMinutes'] == 0
+mvg_data
+```
