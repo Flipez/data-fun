@@ -1,3 +1,4 @@
 /.quarto/
 _freeze/
 *.csv
+.jupyter_cache/
