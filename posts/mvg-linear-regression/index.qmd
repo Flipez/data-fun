@@ -1,34 +1,44 @@
 ---
 jupyter: python3
 execute:
-  freeze: true
+  cache: true
 ---
+
 
 ```{python}
 import pandas as pd
 import numpy as np
-import sklearn
-import scipy
 import matplotlib.pyplot as plt
-from sklearn import preprocessing
-from sklearn.model_selection import train_test_split
-from joblib import Parallel, delayed
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-from sklearn.metrics import f1_score
-from sklearn.metrics import classification_report, ConfusionMatrixDisplay
+import lightgbm as lgb
+import re
+from sklearn.model_selection import train_test_split, ParameterGrid
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import ConfusionMatrixDisplay, f1_score, classification_report
+from joblib import Parallel, delayed
 ```
 
-srgdghdtgh
-
-sr
-gdrtg
+```{python}
+DATA_PATH = "../../data/"
+MVG_FILE = "subway_only_dedup.parquet"
+EVENTS_FILE = "events.csv"
+HOLIDAYS_FILE = "public_holiday.csv"
+ALLIANZ_FILE = "allianz_arena_events.csv"
+WEATHER_FILE = "weather_2024-2025.csv"
+```
 
 ```{python}
-mvg_data_orig = pd.read_parquet("../../data/subway_only_dedup.parquet")
+def load_data(path, mvg_file, events_file, holidays_file, allianz_file, weather_file):
+    mvg_data = pd.read_parquet(path + mvg_file)
+    events_df = pd.read_csv(path + events_file, parse_dates=['start_date', 'end_date'])
+    public_holiday_df = pd.read_csv(path + holidays_file, parse_dates=['date'])
+    allianz_arena_df = pd.read_csv(path + allianz_file, parse_dates=['date'])
+    weather_df = pd.read_csv(path + weather_file, parse_dates=['date'])
+    return mvg_data, events_df, public_holiday_df, allianz_arena_df, weather_df
+
+mvg_data_orig, events_df, public_holiday_df, allianz_arena_df, weather_df = load_data(
+    DATA_PATH, MVG_FILE, EVENTS_FILE, HOLIDAYS_FILE, ALLIANZ_FILE, WEATHER_FILE
+)
 ```
 
 ```{python}
@@ -39,27 +49,115 @@ mvg_data = mvg_data[mvg_data.realtime]
 mvg_data['onTime'] = mvg_data['delayInMinutes'] == 0
 
 mvg_datetime = pd.to_datetime(mvg_data['plannedDepartureTime']).dt
+mvg_data['plannedDepartureTime_dt'] = pd.to_datetime(mvg_data['plannedDepartureTime'])
 
 #mvg_data['hourOfDay'] = mvg_datetime.hour
+
 mvg_data['minuteOfDay'] = mvg_datetime.hour * 60 + mvg_datetime.minute
+# encode minute of day as 23:00 and 00:00 are far apart but close in reality
+mvg_data['minuteSin'] = np.sin(2 * np.pi * mvg_data['minuteOfDay'] / 1440)
+mvg_data['minuteCos'] = np.cos(2 * np.pi * mvg_data['minuteOfDay'] / 1440)
+
+
 mvg_data['dayOfWeek'] = mvg_datetime.day_of_week # Monday=0, Sunday=6
 #mvg_data['dayOfYear'] = mvg_datetime.day_of_year
+
+mvg_data['isRushHour'] = mvg_datetime.hour.between(7, 9) | mvg_datetime.hour.between(16, 18)
+mvg_data['isWeekend'] = mvg_data['dayOfWeek'] >= 5 # Saturday=5, Sunday=6
 
 # remove negative delay for bucketing
 mvg_data = mvg_data[mvg_data['delayInMinutes'] >= 0]
 
-bins = [float('-inf'), 2, np.inf]
-labels = ['On Time', 'Delayed']
-mvg_data['delayCategory'] = pd.cut(mvg_data['delayInMinutes'], bins=bins, labels=labels)
+# only use u6
+mvg_data = mvg_data[mvg_data['label'] == 'U6']
 
-print("New binary class distribution:\n", mvg_data['delayCategory'].value_counts())
+# include events
+mvg_data['isMajorEvent'] = False
+for index, event in events_df.iterrows():
+    event_mask = (
+        (mvg_data['plannedDepartureTime_dt'].dt.date >= event['start_date'].date()) &
+        (mvg_data['plannedDepartureTime_dt'].dt.date <= event['end_date'].date())
+    )
+    mvg_data.loc[event_mask, 'isMajorEvent'] = True
+print("\nEvent day departures vs. normal day departures:")
+print(mvg_data['isMajorEvent'].value_counts())
+
+
+# set if public holiday is true
+holiday_dates = set(public_holiday_df['date'].dt.date)
+mvg_data['isHoliday'] = mvg_data['plannedDepartureTime_dt'].dt.date.isin(holiday_dates)
+print("\nHoliday departures vs. normal day departures:")
+print(mvg_data['isHoliday'].value_counts())
+
+# include allianz arena events
+allianz_arena_dates = set(allianz_arena_df['date'].dt.date)
+mvg_data['isAllianzArenaEvent'] = mvg_data['plannedDepartureTime_dt'].dt.date.isin(allianz_arena_dates)
+print("\nAllianz Arena Event departures vs. normal day departures:")
+print(mvg_data['isAllianzArenaEvent'].value_counts())
+
+#include weather
+weather_df['date'] = pd.to_datetime(weather_df['date'], format='%d.%m.%Y')
+mvg_data = pd.merge(
+    mvg_data,
+    weather_df,
+    how='left',
+    left_on=mvg_data['plannedDepartureTime_dt'].dt.date,
+    right_on=weather_df['date'].dt.date
+)
+mvg_data = mvg_data.drop(columns=['key_0', 'date'])
+nan_weather_rows = mvg_data['tempAvg'].isnull().sum()
+if nan_weather_rows > 0:
+    print(f"Warning: {nan_weather_rows} rows did not have matching weather data and contain NaNs.")
+
+
+#bins = [float('-inf'), 2, np.inf]
+#labels = ['On Time', 'Delayed']
+#mvg_data['delayCategory'] = pd.cut(mvg_data['delayInMinutes'], bins=bins, labels=labels)
+
+print("New binary class distribution:\n", mvg_data['onTime'].value_counts())
 ```
 
 ```{python}
-features = mvg_data.drop(['delayInMinutes', 'onTime', 'plannedDepartureTime', 'delayCategory', 'realtime'], axis=1)
-target = mvg_data['delayCategory']
+mvg_data.sample(5)
+```
 
-features_encoded = pd.get_dummies(features)
+```{python}
+plt.figure(figsize=(8, 8))
+scatter = plt.scatter(
+    mvg_data['minuteSin'],
+    mvg_data['minuteCos'],
+    c=mvg_data['minuteOfDay'], # Color points by the original minute of the day
+    cmap='viridis'            # Use a nice color map
+)
+
+plt.gca().set_aspect('equal', adjustable='box')
+
+plt.title('Cyclical Encoding of Minute of Day')
+plt.xlabel('Sine(Minute of Day)')
+plt.ylabel('Cosine(Minute of Day)')
+
+# Add a colorbar to show what the colors mean
+cbar = plt.colorbar(scatter)
+cbar.set_label('Minute of Day')
+
+plt.grid(True)
+plt.show()
+```
+
+```{python}
+mvg_data.sample(5)
+```
+
+```{python}
+features = mvg_data.drop(['delayInMinutes', 'onTime', 'plannedDepartureTime', 'plannedDepartureTime_dt', 'realtime', 'minuteOfDay', 'onTime', 'tempMax', 'tempMin'], axis=1)
+target = mvg_data['onTime']
+
+features_encoded = pd.get_dummies(features, columns=['station', 'label', 'destination'])
+features_encoded.columns = [re.sub(r'[^A-Za-z0-9_]+', '_', col) for col in features_encoded.columns]
+print(f"Columns after sanitization: {features_encoded.shape[1]}")
+features_encoded = features_encoded.loc[:, ~features_encoded.columns.duplicated()]
+print(f"Columns after removing duplicates: {features_encoded.shape[1]}")
+
 
 print(f"Total rows in the full dataset: {len(features_encoded)}")
 
@@ -82,8 +180,8 @@ print(f"Full test set size: {len(X_test_full)}")
 train_data_full = pd.concat([X_train_full, y_train_full], axis=1)
 target_column_name = y_train_full.name
 
-ontime_samples = train_data_full[train_data_full[target_column_name] == 'On Time']
-delay_samples = train_data_full[train_data_full[target_column_name] == 'Delayed']
+ontime_samples = train_data_full[train_data_full[target_column_name]]
+delay_samples = train_data_full[~train_data_full[target_column_name]]
 
 ontime_downsampled = ontime_samples.sample(n=len(delay_samples), random_state=0)
 
@@ -99,31 +197,40 @@ print(y_train_balanced.value_counts())
 ```
 
 ```{python}
-def train_and_evaluate_rf(estimators, X_train, y_train, X_val, y_val):
+def train_and_evaluate_rf(params, X_train, y_train, X_val, y_val):
     """Trains a Random Forest and returns both train and validation F1-scores."""
     model = RandomForestClassifier(
-        n_estimators=estimators,
+        **params,
         n_jobs=-1,
         random_state=0
     )
+    #model = lgb.LGBMClassifier(
+    #    random_state=0,
+    #    n_jobs=-1,
+    #    **params
+    #)
     model.fit(X_train, y_train)
 
-    # Calculate weighted F1-score instead of accuracy
-    train_pred = model.predict(X_train)
-    train_f1 = f1_score(y_train, train_pred, average='weighted')
-
     val_pred = model.predict(X_val)
-    val_f1 = f1_score(y_val, val_pred, average='weighted')
+    train_pred = model.predict(X_train)
 
-    return estimators, train_f1, val_f1
+    # Calculate F1-score specifically for the 'Delayed' class (which is 'False')
+    # This is the metric we want to maximize to improve precision
+    train_f1 = f1_score(y_train, train_pred, pos_label=False)
+
+    # Calculate F1-score specifically for the 'Delayed' class (which is 'False')
+    # This is the metric we want to maximize to improve precision
+    val_f1 = f1_score(y_val, val_pred, pos_label=False)
+
+    return params, train_f1, val_f1
 ```
 
 ```{python}
 train_data_sample = pd.concat([X_train_sample, y_train_sample], axis=1)
 target_column_name_sample = y_train_sample.name
 
-ontime_samples_s = train_data_sample[train_data_sample[target_column_name_sample] == 'On Time']
-delay_samples_s = train_data_sample[train_data_sample[target_column_name_sample] == 'Delayed']
+ontime_samples_s = train_data_sample[train_data_sample[target_column_name_sample]]
+delay_samples_s = train_data_sample[~train_data_sample[target_column_name_sample]]
 ontime_downsampled_s = ontime_samples_s.sample(n=len(delay_samples_s), random_state=0)
 train_data_balanced_s = pd.concat([ontime_downsampled_s, delay_samples_s])
 
@@ -131,49 +238,84 @@ X_train_sample_balanced = train_data_balanced_s.drop(columns=[target_column_name
 y_train_sample_balanced = train_data_balanced_s[target_column_name_sample]
 
 
-estimators_to_test = range(50, 401, 10)
+#estimators_to_test = range(10, 501, 10)
+param_grid_definition = {
+    'n_estimators': range(10, 501, 10),
+    'min_samples_leaf': [1, 2, 3, 4, 5, 10, 20],
+    'max_depth': [10, 15, 20, None],
+}
+params_to_test = list(ParameterGrid(param_grid_definition))
+print(f"Generated {len(params_to_test)} parameter combinations to test.")
+print("First 3 combinations:")
+print(params_to_test[:3])
 
-results = Parallel(n_jobs=3)(
-    delayed(train_and_evaluate_rf)(n, X_train_sample_balanced, y_train_sample_balanced, X_val_sample, y_val_sample) for n in estimators_to_test
+
+results = Parallel(n_jobs=-1)(
+    delayed(train_and_evaluate_rf)(
+        params,
+        X_train_sample_balanced,
+        y_train_sample_balanced,
+        X_val_sample,
+        y_val_sample
+    ) for params in params_to_test
 )
+results_df = pd.DataFrame(results, columns=['params', 'train_f1_score', 'validation_f1_score'])
 ```
 
 ```{python}
-training_results = {n: train_acc for n, train_acc, val_acc in results}
-validation_results = {n: val_acc for n, train_acc, val_acc in results}
-```
+best_params, _, best_val_f1_score = max(results, key=lambda item: item[2])
 
-```{python}
-params, train_f1_scores = zip(*sorted(training_results.items()))
-plt.plot(params, train_f1_scores, label="Training F1-Score", marker='o')
+print("\n--- Hyperparameter Tuning Complete ---")
+print(f"Best Validation F1-Score (for 'Delayed' class): {best_val_f1_score:.4f}")
+print("Best Parameters Found:")
+print(best_params)
 
-params, val_f1_scores = zip(*sorted(validation_results.items()))
-plt.plot(params, val_f1_scores, label="Validation F1-Score", marker='x')
+def format_params(p_dict):
+    return (f"n_est:{p_dict.get('n_estimators', 'N/A')}, "
+            f"min_samples_leaf:{p_dict.get('min_samples_leaf', 'N/A')}, "
+            f"depth:{p_dict.get('max_depth', 'N/A')}")
+results_df['param_label'] = results_df['params'].apply(format_params)
 
-plt.title("Random Forest: F1-Score vs. Number of Estimators")
-plt.xlabel("Number of Estimators (n_estimators)")
-plt.ylabel("Weighted F1-Score") # Update the y-axis label
-plt.legend()
-plt.grid(True)
+df_melted = results_df.melt(
+    id_vars='param_label',
+    value_vars=['train_f1_score', 'validation_f1_score'],
+    var_name='score_type',
+    value_name='f1_score'
+)
+
+plt.figure(figsize=(12, 8))
+sns.barplot(x='f1_score', y='param_label', hue='score_type', data=df_melted, orient='h')
+
+plt.title('LightGBM Tuning: Training vs. Validation F1-Scores')
+plt.xlabel("F1-Score for 'Delayed' Class")
+plt.ylabel("Parameter Combination")
+plt.legend(title='Score Type')
+plt.grid(axis='x', linestyle='--', alpha=0.7)
 plt.show()
 ```
 
 ```{python}
-best_parameter = max(validation_results, key=validation_results.get)
-
-best_accuracy = validation_results[best_parameter]
-
-print(f"The best parameter is: {best_parameter}")
-print(f"With a validation accuracy of: {best_accuracy:.4f}")
+#best_parameter = max(validation_results, key=validation_results.get)
+#
+#best_accuracy = validation_results[best_parameter]
+#
+#print(f"The best parameter is: {best_parameter}")
+#print(f"With a validation accuracy of: {best_accuracy:.4f}")
 ```
 
 ```{python}
 final_model = RandomForestClassifier(
-    n_estimators=best_parameter,
+    **best_params,
     n_jobs=-1,
     verbose=1,
     random_state=0
 )
+#final_model = lgb.LGBMClassifier(
+#    **best_params,
+#    n_jobs=-1,
+#    verbose=-1,
+#    random_state=0
+#)
 
 print(f"Training final model on {len(X_train_balanced)} samples...")
 final_model.fit(X_train_balanced, y_train_balanced)
@@ -211,3 +353,4 @@ disp = ConfusionMatrixDisplay.from_estimator(
 disp.ax_.set_title('Confusion Matrix')
 plt.show()
 ```
+
